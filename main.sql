@@ -337,3 +337,110 @@ LEFT JOIN periodo_medio p USING (ticker_name)
 LEFT JOIN beta_dividendo_bruto bdb
     on bdb.ticker_name = c.ticker_name;
 
+-- PDR
+
+with cotacoes AS (
+    SELECT
+        ticker_name,
+         Date,
+         Open,
+         Close,
+         Dividends,
+         LAG(Close, 1) OVER (PARTITION BY ticker_name ORDER BY Date) AS fechamento_ontem
+    FROM prices
+)
+SELECT
+    ticker_name,
+    (fechamento_ontem - Open) / Dividends as PDR,
+    Open,
+    fechamento_ontem,
+    Dividends
+FROM cotacoes as c
+where
+    fechamento_ontem IS NOT NULL AND
+    Dividends != 0 AND
+    ticker_name IN (select ticker_name from tickers_ativos);
+
+-- Media global PDR
+
+WITH cotacoes AS (
+    SELECT
+         ticker_name,
+         Date,
+         Open,
+         Close,
+         Dividends,
+         LAG(Close, 1) OVER (PARTITION BY ticker_name ORDER BY Date) AS fechamento_ontem
+    FROM prices
+),
+pdrs AS (
+    SELECT c.ticker_name,
+           Date,
+           (fechamento_ontem - Open) / Dividends as PDR
+    FROM cotacoes as c
+    WHERE
+        fechamento_ontem IS NOT NULL AND
+        Dividends != 0 AND
+        ticker_name IN (SELECT ticker_name FROM tickers_ativos)
+)
+SELECT AVG(PDR) AS media_PDR_geral
+FROM pdrs;
+
+-- Entender os dividendos:
+
+SELECT
+    p.ticker_name,
+    COUNT(DISTINCT p.Dividends) AS dividendos_distintos
+FROM
+    prices p
+WHERE
+    p.ticker_name IN (
+        SELECT ticker_name
+        FROM beta_dividendo_bruto
+        WHERE alfa IS NULL
+    )
+    AND p.Dividends != 0
+GROUP BY
+    p.ticker_name;
+
+-- Ativo exceção
+select DISTINCT full_exchange_name
+from tickers
+group by tickers.full_exchange_name;
+
+-- Beta de cada ativo
+WITH cotacoes AS (
+    SELECT
+        ticker_name,
+        Date,
+        Open,
+        Close,
+        Dividends,
+        LAG(Close, 1) OVER (PARTITION BY ticker_name ORDER BY Date) AS fechamento_ontem
+    FROM prices
+),
+pdrs AS (
+    SELECT
+        c.ticker_name,
+        (fechamento_ontem - Open) / Dividends AS PDR
+    FROM cotacoes AS c
+    WHERE
+        fechamento_ontem IS NOT NULL AND
+        Dividends != 0 AND
+        ticker_name IN (SELECT ticker_name FROM tickers_ativos)
+),
+media_pdr_por_ticker AS (
+    SELECT
+        ticker_name,
+        ROUND(AVG(PDR), 4) AS media_PDR
+    FROM pdrs
+    GROUP BY ticker_name
+)
+SELECT
+    b.ticker_name,
+    ROUND(b.beta_dividendo, 4) AS beta_dividendo,
+    ROUND(b.significancia_beta, 4) AS significancia_beta,
+    ROUND(b.erro_beta, 4) AS erro_beta,
+    m.media_PDR
+FROM beta_dividendo_bruto b
+LEFT JOIN media_pdr_por_ticker m ON b.ticker_name = m.ticker_name;
